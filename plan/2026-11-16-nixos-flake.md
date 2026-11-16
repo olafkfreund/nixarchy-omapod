@@ -1,9 +1,10 @@
 ---
-status: approved
+status: draft
 issue: none (issues disabled on olafkfreund/nixarchy-omapod)
 spec: spec/2026-11-16-nixos-flake.md
 coders:
   1: coder   # package + flake skeleton: Nix boilerplate, many small parts
+  1a: codex  # mpv credential fix + detection test + test runner: small, security-sensitive
   2: codex   # merge-settings.py: small, tricky ownership/lock logic with a test table
   3: coder   # NixOS module: short, conventional
   4: coder   # Home Manager module + shared example: several options, conventional Nix
@@ -44,13 +45,44 @@ coders never stage, commit or push.
   script goes with it). The README says: set `widget.enable = false`, rebuild, then
   remove the import.
 
+## Changes found during step 1 (re-approval needed)
+
+- **E. App fix: mpv 0.42 sends podcast passwords before being asked.** Found by
+  `tests/test_hardening.py:348` failing in the Nix build. Cause, confirmed by tracing
+  (`--msg-level=all=trace`) against a local server: mpv 0.42 serves `http(s)://` through
+  a new libcurl backend (`[curl]` in the log), and libcurl sends URL credentials as
+  `Authorization: Basic` on the **first** request. The app's design
+  (`omapod/player/controller.py:300-305`) relies on FFmpeg, which sends them only after
+  a 401. FFmpeg 9.0.2 alone (ffprobe) and mpv with `--curl-enabled=no` both send nothing
+  until asked. Credentials still never reached another host (libcurl drops them on
+  cross-host redirects), so the exposure is: the podcast's own server gets the password
+  on paths that did not ask for it. Not Nix-specific: any mpv ≥ 0.42 built with libcurl
+  does this, Arch included. You chose to fix it in this task (new step 1a). This
+  widens scope to `omapod/player/mpv.py` and `tests/`.
+- **F. Three hardening tests cannot run in the build sandbox.** There `/` is owned by
+  uid 65534 (`nobody`), so `omapod.config.others_can_change()` correctly reports every
+  path as changeable by others: `ImportedFolders.test_choosing_the_folder_here_gives_its_podcast_its_files_back`,
+  `LocalFolders.test_files_stay_unless_the_user_confirms_and_then_go_to_the_trash`,
+  `SharedFolders.test_files_of_an_added_folder_that_others_can_change_stay` (all in
+  `tests/test_hardening.py`). Same treatment as the approved Xvfb fallback: excluded
+  from the build by name, run in the VM test (step 5, item 11). `test_tiling` and
+  `test_dock` pass in the sandbox, so they stay in the build.
+- **G. Step-1 implementation details** (coder): the package source is
+  `lib.fileset.toSource` of what the tests need, including `README.md` and `install.sh`
+  (`test_layout` and `test_install.LaunchersTest` read them); checkPhase puts a
+  `dbus-run-session` wrapper first on `PATH` that adds
+  `--config-file=${dbus}/share/dbus-1/session.conf` (the sandbox has no
+  `/etc/dbus-1/session.conf`, and `test_tiling` calls `dbus-run-session` itself);
+  `meta.description` added.
+
 ## Approved decisions (from the spec; no need to open it)
 
 - **Files:** `flake.nix`, `flake.lock`, `nix/package.nix`, `nix/nixos.nix`,
   `nix/home.nix`, `nix/example-home.nix`, `nix/merge-settings.py`,
   `nix/test_merge_settings.py`, `nix/test.nix`, `.github/workflows/nix.yml`,
-  `README.md`. No change under `omapod/`, `tests/`, `plugin/`, `data/`, nor to
-  `install.sh` or `manifest.json`.
+  `README.md`, `nix/run-tests.py`; and for change E only `omapod/player/mpv.py` and
+  `tests/test_player.py`. No other change under `omapod/`, `tests/`, `plugin/`, `data/`,
+  nor to `install.sh` or `manifest.json`.
 - **Flake:** inputs `nixpkgs` (`github:NixOS/nixpkgs/nixos-unstable`) and `home-manager`
   (`github:nix-community/home-manager`, `inputs.nixpkgs.follows = "nixpkgs"`; used only
   by checks). Systems `x86_64-linux`, `aarch64-linux`. Outputs:
@@ -180,6 +212,31 @@ coders never stage, commit or push.
    `sys.path`). If `test_tiling`/`test_dock` are flaky in the sandbox: drop them from the
    checkPhase with `-k`-style exclusion, run them in the VM (step 5, fallback), say so in
    README `## Development` and the PR, and update this plan in the same commit.
+1a. **App fix: keep mpv on FFmpeg's networking (change E).** In
+   `omapod/player/mpv.py`, `Mpv.start` (args list at lines 62-70): append
+   `--curl-enabled=no` when this mpv knows the option, so the password is sent only
+   after a 401, as `controller.py:300-305` assumes. Detect it once per process with
+   `subprocess.run(["mpv", "--list-options"], capture_output=True, text=True,
+   timeout=10)` and `"--curl-enabled" in stdout`, cached in a module-level variable;
+   any error (missing mpv, timeout, non-zero exit) means "not supported", no flag (older
+   mpv rejects unknown options and would not start). Comment the why in one line next to
+   the flag, in the file's existing style (see the `--tls-verify` comment above it). In
+   `tests/test_player.py` add one small test for the detection: a fake `mpv` script on
+   `PATH` whose `--list-options` lists the option gives the flag; one that does not, or
+   exits non-zero, gives no flag (reset the cache between cases).
+   Also create `nix/run-tests.py`: runs `unittest` discovery like
+   `python -m unittest discover -v -s tests -t .`, but removes the three test ids of
+   change F from the suite and prints each as `excluded in the Nix sandbox: <id> (/ is
+   owned by nobody)`; exits non-zero on failure. Use it in `nix/package.nix`'s checkPhase
+   in place of the plain discover command.
+   → verify: `nix build -L .#omapod`: `test_stream_redirected_to_another_host_does_not_take_the_password_along`
+   passes, the new detection test passes, the three exclusions are printed, only
+   `test_install` skips; then `nix run . -- --version` and the rest of step 1's checks.
+   On this host also: `python3 -B -m unittest -v
+   tests.test_hardening.CredentialsStayWithTheirHost tests.test_player` with system mpv
+   0.42 passes.
+   Traps: never pass `--curl-enabled=no` to an mpv that does not list it. Keep the arg
+   order otherwise unchanged. Do not touch other tests.
 2. **Settings merge.** Create `nix/merge-settings.py` and `nix/test_merge_settings.py`;
    in `nix/package.nix` add the share file, the libexec wrapper and the checkPhase line.
    → verify: `nix build -L .#omapod`; the log shows one passing test for each rule in
@@ -253,9 +310,9 @@ coders never stage, commit or push.
    10. `OMAPOD_HOME` is ignored: `systemctl --user set-environment
        OMAPOD_HOME=/tmp/elsewhere`, quit the app (`omapod ctl quit`, wait until `ctl
        state` fails), restart `omapod-settings.service`; `/tmp/elsewhere` does not exist.
-   11. Fallback only (if step 1 moved Xvfb tests here): copy the source with `cp -r
-       ${self} /tmp/src` and run `xvfb-run -a dbus-run-session -- python -m unittest -v
-       tests.test_tiling tests.test_dock` there with the package's Python env.
+   11. The three tests of change F: copy the source with `cp -r ${self} /tmp/src`
+       (as alice) and run them there by id with the package's Python env
+       (`OMAPOD_MPV_AO=null`, `python -B -m unittest -v <id> <id> <id>`); all pass.
    → verify: `nix build -L .#checks.x86_64-linux.vm`.
    Traps: the app needs seconds before `ctl state` answers; always `wait_until_succeeds`.
    `dbus-run-session` gives the app its own bus, so step 9 uses alice's user bus for
@@ -313,7 +370,7 @@ coders never stage, commit or push.
 
 | Command | Expected |
 |---|---|
-| `nix build -L .#omapod` | suite passes; only `test_install` skipped; merge tests pass |
+| `nix build -L .#omapod` | suite passes; only `test_install` skipped; 3 change-F tests listed as excluded; merge and mpv-detection tests pass |
 | `nix run . -- --version` | `omaPOD 0.1.5` |
 | step 3 and 4 `nix eval` commands | outputs as noted under each |
 | `nix build -L .#checks.x86_64-linux.vm` | VM script steps 1–10 pass |
