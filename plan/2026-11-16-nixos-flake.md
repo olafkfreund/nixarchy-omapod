@@ -85,6 +85,19 @@ coders never stage, commit or push.
 - **I. Step 3 done by the lead** (the coder never started it); its verify command read
   `.text` of `/etc/xdg/mimeapps.list`, which NixOS sets through `.source`; corrected.
 
+- **J. Step-9 review fixes** (Opus and Codex reviews, applied by the lead): the widget
+  destination is shell-escaped; the widget defaults are patched with `jq` at build
+  time instead of reading `manifest.json` at evaluation (that was import-from-derivation
+  and built the package during evaluation); bind keys may not contain `,` (Hyprland
+  binds are comma-separated); the probe timeout test sleeps with the test's own Python
+  (`/bin/sleep` does not exist on NixOS, so it tested the failure case twice). The app
+  has no "reset setting" in its UI (the only `Settings.reset` caller is the secrets
+  migration, `omapod/config.py:411`), so the spec's and step 7's "reset in the UI brings
+  the Nix value back" is wrong: the README says to delete the key from `settings.json`
+  with omaPOD closed. Not fixed (low, listed in the PR): the lock message says "omaPOD
+  is running" also when the refresh timer holds the lock; the activation `PATH` export
+  persists for later activation steps; Python `==` treats JSON `true` and `1` as equal.
+
 ## Approved decisions (from the spec; no need to open it)
 
 - **Files:** `flake.nix`, `flake.lock`, `nix/package.nix`, `nix/nixos.nix`,

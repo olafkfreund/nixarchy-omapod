@@ -164,7 +164,8 @@ omaPOD). Media keys already work through MPRIS. With `keybindings.backend = "hyp
 
 - Nix sets the value if the setting is not there yet.
 - A change you make in the app wins. Nix leaves it alone and does not set it again.
-- Reset the setting in the app and Nix's value comes back at the next merge.
+- To hand a setting back to Nix, close omaPOD and delete its key from `~/.config/omapod/settings.json`; the
+  next merge sets it again.
 
 While omaPOD runs, the merge waits for the next login or rebuild. Nix refuses settings that hold secrets or the
 app's own state: `podcastindex_key`, `podcastindex_secret`, `parental_password_hash`, `proxy.password`,
@@ -191,8 +192,8 @@ unverified: they may only prefill the bar's settings form for a new entry, not c
 nix flake update omapod
 ```
 
-Then rebuild. **Remove**: set `widget.enable = false`, rebuild (this removes the widget the module installed),
-then delete the import and rebuild again. Your library in `~/.local/share/omapod` and `~/.config/omapod` stays.
+Then rebuild. **Remove**: keep `programs.omapod.enable = true`, set `widget.enable = false` and rebuild (this removes the
+widget the module installed), then delete the import and rebuild again. Your library in `~/.local/share/omapod` and `~/.config/omapod` stays.
 
 Known limit: under Nix a running omaPOD does not say when a newer version waits for a restart.
 

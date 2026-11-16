@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import tempfile
 import time
 import unittest
@@ -52,7 +53,7 @@ class MpvCurlOptionTest(unittest.TestCase):
             check('echo "--curl-enabled"\nexit 0\n', True)
             check('echo "--other-option"\nexit 0\n', False)
             check('exit 1\n', True, cached=False)
-            check('/bin/sleep 4\n', True, cached=False)
+            check(f'{sys.executable} -c "import time; time.sleep(4)"\n', True, cached=False)
 
             check('echo "--curl-enabled"\nexit 0\n', True)
             old_mtime = executable.stat().st_mtime_ns

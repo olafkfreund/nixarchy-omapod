@@ -11,6 +11,8 @@ let
   widgetId = "io.github.arikisonfire.pod";
   json = pkgs.formats.json { };
   safe = "^[A-Za-z0-9 +_.,-]+$";
+  # Keys may not hold "," : Hyprland binds are comma-separated.
+  safeKey = "^[A-Za-z0-9 +_.-]+$";
 
   defaultBinds = {
     "SUPER + CTRL + SHIFT + K" = "toggle";
@@ -66,31 +68,28 @@ let
       cfg.settings ? proxy && builtins.isAttrs cfg.settings.proxy && cfg.settings.proxy ? password
     ) "proxy.password";
 
-  manifest = builtins.fromJSON (builtins.readFile "${cfg.package}/share/omapod/widget/manifest.json");
-  widgetDir = pkgs.runCommand "omapod-widget" { } ''
+  # The defaults are patched at build time: reading the manifest at evaluation would build the package
+  # first (import from derivation).
+  widgetDefaults = pkgs.writeText "omapod-widget-defaults.json" (
+    builtins.toJSON {
+      inherit (cfg.widget)
+        showTitle
+        maxTitleWidth
+        hideWhenStopped
+        launchCommand
+        socketPath
+        ;
+    }
+  );
+  widgetDir = pkgs.runCommand "omapod-widget" { nativeBuildInputs = [ pkgs.jq ]; } ''
     cp -r ${cfg.package}/share/omapod/widget $out
     chmod -R u+w $out
-    cp ${
-      pkgs.writeText "manifest.json" (
-        builtins.toJSON (
-          lib.recursiveUpdate manifest {
-            barWidget.defaults = {
-              inherit (cfg.widget)
-                showTitle
-                maxTitleWidth
-                hideWhenStopped
-                launchCommand
-                socketPath
-                ;
-            };
-          }
-        )
-      )
-    } $out/manifest.json
+    jq --slurpfile d ${widgetDefaults} '.barWidget.defaults += $d[0]' \
+      ${cfg.package}/share/omapod/widget/manifest.json > $out/manifest.json
   '';
 
   widgetScript = ''
-    dest="${config.xdg.configHome}/omarchy/plugins/${widgetId}"
+    dest=${lib.escapeShellArg "${config.xdg.configHome}/omarchy/plugins/${widgetId}"}
     parent="$(dirname "$dest")"
     tmp="$parent/.${widgetId}.new"
     export PATH="${
@@ -181,7 +180,7 @@ in
         default = { };
         description = ''
           Key combination to `omapod ctl` arguments, merged over the defaults.
-          Set a key to `null` to drop a default. Keys must match `${safe}`.
+          Set a key to `null` to drop a default. Keys must match `${safeKey}`, values `${safe}`.
         '';
         example = {
           "SUPER + CTRL + SHIFT + N" = null;
@@ -243,8 +242,8 @@ in
             message = "programs.omapod.settings.${k} is managed by omaPOD itself and cannot be declared.";
           }) badSettings
           ++ map (k: {
-            assertion = builtins.match safe k != null;
-            message = "programs.omapod.keybindings.binds: key \"${k}\" may only contain letters, digits, space and + _ . , -";
+            assertion = builtins.match safeKey k != null;
+            message = "programs.omapod.keybindings.binds: key \"${k}\" may only contain letters, digits, space and + _ . -";
           }) (builtins.attrNames cfg.keybindings.binds);
 
         home.activation.omapodWidget = lib.hm.dag.entryAfter [ "writeBoundary" ] widgetScript;
