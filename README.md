@@ -83,6 +83,123 @@ Without the marketplace, `./install.sh --plugin` in a copy of this repository in
 bar widget, `--link` runs it straight from there (for development), and `--uninstall` removes both. Installing
 or updating the widget this way makes the Omarchy shell reload all of its plugins, so the installer asks first.
 
+## NixOS
+
+The flake builds omaPOD and ships a NixOS module and a Home Manager module. Try it without installing:
+
+```bash
+nix run github:olafkfreund/nixarchy-omapod
+```
+
+Add the flake as an input:
+
+```nix
+inputs.omapod.url = "github:olafkfreund/nixarchy-omapod";
+```
+
+**NixOS module**: installs the app and, with `defaultHandler` (on by default), makes it the system default for
+`podcast://`, `itpc://`, `pcast://` and `antennapod-subscribe://` links and OPML files. Your own
+`~/.config/mimeapps.list` still wins.
+
+```nix
+{
+  imports = [ inputs.omapod.nixosModules.default ];
+  programs.omapod.enable = true;
+}
+```
+
+**Home Manager module**: the app, an optional refresh timer, key bindings, the bar widget and settings.
+
+```nix
+{
+  imports = [ inputs.omapod.homeManagerModules.default ];
+}
+```
+
+All options, set once (the unset ones are shown commented out at their defaults):
+
+<!-- example-home.nix -->
+```nix
+{
+  programs.omapod = {
+    enable = true; # installs omaPOD
+
+    # package = ...;              # default: the package from this flake
+    # defaultHandler = true;      # default app for podcast links and OPML, if xdg.mimeApps.enable
+
+    refreshTimer.enable = true;
+    # refreshTimer.onCalendar = "hourly";
+
+    # keybindings.enable = true;
+    # keybindings.backend = "nixarchy";  # or "hyprland"
+    keybindings.binds = {
+      "SUPER + CTRL + SHIFT + N" = null; # drop a default
+      "SUPER + CTRL + SHIFT + 1" = "speed 1.5"; # add one
+    };
+
+    widget.enable = true;
+    # widget.showTitle = true;
+    widget.maxTitleWidth = 240;
+    # widget.hideWhenStopped = false;
+    # widget.launchCommand = "";
+    # widget.socketPath = "";
+
+    settings.speed = 1.5;
+  };
+}
+```
+
+**Key bindings** are written to `~/.config/hypr/omapod-binds.lua`, which is overwritten on every rebuild. Add this
+line once to `~/.config/hypr/bindings.lua`:
+
+```lua
+pcall(require, "hypr.omapod-binds")
+```
+
+The defaults are SUPER + CTRL + SHIFT + K (play/pause), COMMA (rewind), PERIOD (forward), N (skip) and O (show
+omaPOD). Media keys already work through MPRIS. With `keybindings.backend = "hyprland"` the binds go to
+`wayland.windowManager.hyprland.settings.bind` instead.
+
+**Settings** declared in Nix are merged into `~/.config/omapod/settings.json` when you log in and after a rebuild:
+
+- Nix sets the value if the setting is not there yet.
+- A change you make in the app wins. Nix leaves it alone and does not set it again.
+- To hand a setting back to Nix, close omaPOD and delete its key from `~/.config/omapod/settings.json`; the
+  next merge sets it again.
+
+While omaPOD runs, the merge waits for the next login or rebuild. Nix refuses settings that hold secrets or the
+app's own state: `podcastindex_key`, `podcastindex_secret`, `parental_password_hash`, `proxy.password`,
+`local_folders`, `last_page`, `history_repair`, `mirror_downloads_ready`, `auto_db_export_last`,
+`stats_reset_ts` and every key starting with `window_`, `sync_last_`, `remote_downloads_`, `queue_sync_` or
+`favorites_sync_`.
+
+**Bar widget**: with `widget.enable` the module installs the widget into
+`~/.config/omarchy/plugins/io.github.arikisonfire.pod`. A widget that is already there from the marketplace or
+`install.sh` is left alone, and the rebuild says so; remove it first
+(`omarchy plugin remove io.github.arikisonfire.pod` or `install.sh --uninstall`), then rebuild. After that, add it
+to the bar once:
+
+```bash
+omarchy plugin enable io.github.arikisonfire.pod
+```
+
+The five `widget.*` options (`showTitle`, `maxTitleWidth`, `hideWhenStopped`, `launchCommand`, `socketPath`) are
+unverified: they may only prefill the bar's settings form for a new entry, not change an entry that exists.
+
+**Update**:
+
+```bash
+nix flake update omapod
+```
+
+Then rebuild. **Remove**: keep `programs.omapod.enable = true`, set `widget.enable = false` and rebuild (this removes the
+widget the module installed), then delete the import and rebuild again. Your library in `~/.local/share/omapod` and `~/.config/omapod` stays.
+
+Known limit: under Nix a running omaPOD does not say when a newer version waits for a restart.
+
+omaPOD starts mpv 0.42 and later with `--curl-enabled=no`, so a private podcast's password is only sent when the
+server asks for it.
+
 ## Sync with AntennaPod
 
 Use the same account in both apps.
@@ -169,6 +286,8 @@ Ctrl+R refresh, Alt+1…6 screens, Ctrl+? all shortcuts.
 
 ```bash
 python3 -B -m unittest discover -s tests -t .
+nix build -L          # builds the package and runs the tests in the Nix sandbox
+nix flake check -L    # also runs the NixOS VM test (needs KVM)
 OMAPOD_HOME=$PWD/.dev OMAPOD_MPV_AO=null python3 -m omapod   # isolated data, no sound
 ```
 

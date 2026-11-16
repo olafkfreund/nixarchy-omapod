@@ -2,9 +2,12 @@ import json
 import os
 import shutil
 import socket
+import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gi.repository import GLib
 
@@ -26,6 +29,40 @@ def run_until(predicate, timeout=15.0):
     GLib.timeout_add(50, check)
     loop.run()
     return predicate()
+
+
+class MpvCurlOptionTest(unittest.TestCase):
+    def test_probe_and_fail_closed(self):
+        from omapod.player import mpv
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"PATH": directory}):
+            executable = Path(directory) / "mpv"
+            arguments = Path(directory) / "arguments"
+            player = mpv.Mpv(Path(directory) / "socket", lambda _: None, extra_args=["--curl-enabled=yes"])
+
+            def check(script, expected, cached=True):
+                executable.write_text(f'#!/bin/sh\nif [ "$1" = "--list-options" ]; then\n{script}fi\nprintf "%s\\n" "$@" > {arguments}\nexit 1\n', encoding="utf-8")
+                executable.chmod(0o755)
+                mpv._curl_options.clear()
+                with self.assertRaises(mpv.MpvError):
+                    player.start()
+                args = arguments.read_text(encoding="utf-8").splitlines()
+                self.assertEqual(args[-1] == "--curl-enabled=no", expected)
+                self.assertEqual(bool(mpv._curl_options), cached)
+
+            check('echo "--curl-enabled"\nexit 0\n', True)
+            check('echo "--other-option"\nexit 0\n', False)
+            check('exit 1\n', True, cached=False)
+            check(f'{sys.executable} -c "import time; time.sleep(4)"\n', True, cached=False)
+
+            check('echo "--curl-enabled"\nexit 0\n', True)
+            old_mtime = executable.stat().st_mtime_ns
+            executable.write_text(f'#!/bin/sh\nif [ "$1" = "--list-options" ]; then\necho "--other-option"\nexit 0\nfi\nprintf "%s\\n" "$@" > {arguments}\nexit 1\n', encoding="utf-8")
+            os.utime(executable, ns=(old_mtime + 1, old_mtime + 1))
+            with self.assertRaises(mpv.MpvError):
+                player.start()
+            self.assertEqual(arguments.read_text(encoding="utf-8").splitlines()[-1], "--curl-enabled=yes")
+            self.assertEqual(len(mpv._curl_options), 2)
 
 
 @unittest.skipUnless(shutil.which("mpv"), "mpv not installed")

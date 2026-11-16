@@ -90,6 +90,7 @@ file     player/mpv.py                Mpv._cleanup                              
 file     player/mpv.py                Mpv.available                                 shutil.which
 file     player/mpv.py                Mpv.start                                     os.open
 file     player/mpv.py                Mpv.start                                     os.unlink
+file     player/mpv.py                Mpv.start                                     shutil.which
 file     ui/app.py                    OmaPodApp._auto_backup                        folder.mkdir
 file     ui/app.py                    OmaPodApp._auto_backup                        old.unlink
 file     ui/app.py                    OmaPodApp._fallback_open                      shutil.which
@@ -126,6 +127,7 @@ network  sync/service.py              default_device_id                         
 program  __main__.py                  main                                          os.execve
 program  config.py                    instance_lock                                 os.kill
 program  player/mpv.py                Mpv.start                                     subprocess.Popen
+program  player/mpv.py                _curl_enabled_option                          subprocess.run
 program  ui/app.py                    OmaPodApp._fallback_open                      subprocess.Popen
 program  ui/app.py                    OmaPodApp.open_uri                            Gio.AppInfo.launch_default_for_uri
 program  ui/theme.py                  hypr_rounding                                 subprocess.run

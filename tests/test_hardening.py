@@ -348,6 +348,63 @@ class CredentialsStayWithTheirHost(Servers):
         self.assertNotIn(AUTH, podcast.credentials("/stats.mp3"))
         self.assertIn(AUTH, podcast.credentials("/own.mp3"))
 
+    def _play_protected_stream(self, podcast, other=None):
+        from omapod import config
+        from omapod.events import bus
+        from omapod.models import FEED_SUBSCRIBED
+        from omapod.player.controller import PlayerController
+        from tests.test_player import run_until
+
+        bus.attach_main_loop()
+        with self.db.tx() as conn:
+            feed_id = self.db.insert_feed(conn, {"url": podcast.base + "/feed.xml", "title": "Private",
+                                                 "state": FEED_SUBSCRIBED, "username": "user", "password": "pass"})
+            episode_id = self.db.insert_episode(conn, {"feed_id": feed_id, "guid": "protected",
+                                                        "title": "Protected", "media_url": podcast.base + "/protected.mp3",
+                                                        "media_type": "audio/mpeg"})
+        player = PlayerController(self.library, self.settings, config.paths)
+        self.library.player = player
+        try:
+            self.assertTrue(player.play_episode(episode_id, checked=True))
+            self.assertTrue(run_until(lambda: len(podcast.credentials("/protected.mp3")) >= 2 and
+                                      (other is None or bool(other.credentials("/audio.mp3")))), player.error)
+        finally:
+            player.shutdown()
+
+    @unittest.skipUnless(shutil.which("mpv"), "mpv not installed")
+    def test_private_stream_waits_for_401_before_sending_password(self):
+        podcast = self.host()
+        podcast.routes["/protected.mp3"] = (200, {"Content-Type": "audio/mpeg"},
+                                             (FIX / "tone.mp3").read_bytes())
+        podcast.private.add("/protected.mp3")
+        self._play_protected_stream(podcast)
+        self.assertEqual(podcast.credentials("/protected.mp3")[:2], [None, AUTH])
+
+    @unittest.skipUnless(shutil.which("mpv"), "mpv not installed")
+    def test_authenticated_stream_redirect_does_not_send_password_to_other_host(self):
+        podcast, other = self.host(), self.host("localhost")
+        podcast.private.add("/protected.mp3")
+        podcast.routes["/protected.mp3"] = (302, {"Location": other.base + "/audio.mp3"}, b"")
+        other.routes["/audio.mp3"] = (200, {"Content-Type": "audio/mpeg"},
+                                      (FIX / "tone.mp3").read_bytes())
+        self._play_protected_stream(podcast, other)
+        self.assertEqual(podcast.credentials("/protected.mp3")[:2], [None, AUTH])
+        self.assertTrue(other.credentials("/audio.mp3"))
+        self.assertEqual(other.credentials("/audio.mp3"), [None])
+
+    @unittest.skipUnless(shutil.which("mpv"), "mpv not installed")
+    def test_redirected_host_asking_for_password_does_not_receive_it(self):
+        podcast, other = self.host(), self.host("localhost")
+        podcast.private.add("/protected.mp3")
+        podcast.routes["/protected.mp3"] = (302, {"Location": other.base + "/audio.mp3"}, b"")
+        other.private.add("/audio.mp3")
+        other.routes["/audio.mp3"] = (200, {"Content-Type": "audio/mpeg"},
+                                      (FIX / "tone.mp3").read_bytes())
+        self._play_protected_stream(podcast, other)
+        self.assertEqual(podcast.credentials("/protected.mp3")[:2], [None, AUTH])
+        self.assertTrue(other.credentials("/audio.mp3"))
+        self.assertNotIn(AUTH, other.credentials("/audio.mp3"))
+
     def test_password_protected_podcast_does_not_move_to_another_host(self):
         podcast, elsewhere = self.host(), self.host("localhost")
         body = FEED.replace(b"MEDIA", podcast.base.encode() + b"/one.mp3")
