@@ -75,6 +75,13 @@ coders never stage, commit or push.
   `/etc/dbus-1/session.conf`, and `test_tiling` calls `dbus-run-session` itself);
   `meta.description` added.
 
+- **H. Step-4 details** (coder, reviewed by the lead): the widget install writes
+  `.nix-managed` into the staging dir before the `mv`, so a crash never leaves an
+  unmarked folder; an extra assertion checks bind key names (`attrsOf` cannot type
+  keys); the step-4 assertion check had a stray `!` and is corrected; the
+  `omapod-settings` service exists whenever the module is enabled (also with
+  `settings = { }`, so keys Nix wrote earlier are dropped when removed).
+
 ## Approved decisions (from the spec; no need to open it)
 
 - **Files:** `flake.nix`, `flake.lock`, `nix/package.nix`, `nix/nixos.nix`,
@@ -295,7 +302,7 @@ coders never stage, commit or push.
    # header + 5 o.bind lines (4 defaults without N, plus speed 1.5)
    nix eval --json --impure --expr "$HM in (mk { programs.omapod.keybindings.backend = \"hyprland\"; wayland.windowManager.hyprland.enable = true; }).config.wayland.windowManager.hyprland.settings.bind"
    nix eval --json --impure --expr "$HM in builtins.attrNames (mk {}).config.systemd.user.services"   # omapod-refresh, omapod-settings
-   ! nix eval --impure --expr "$HM in (mk { programs.omapod.settings.local_folders = [ ]; }).activationPackage" 2>&1 | grep -q local_folders || echo "assertion missing"
+   nix eval --impure --expr "$HM in (mk { programs.omapod.settings.local_folders = [ ]; }).activationPackage" 2>&1 | grep -q local_folders || echo "assertion missing"
    ```
    Traps: this module must not set `xdg.mimeApps.enable`. Activation runs as the user;
    every write through `$DRY_RUN_CMD`, every path quoted (`$HOME` may hold spaces).
