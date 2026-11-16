@@ -82,6 +82,9 @@ coders never stage, commit or push.
   `omapod-settings` service exists whenever the module is enabled (also with
   `settings = { }`, so keys Nix wrote earlier are dropped when removed).
 
+- **I. Step 3 done by the lead** (the coder never started it); its verify command read
+  `.text` of `/etc/xdg/mimeapps.list`, which NixOS sets through `.source`; corrected.
+
 ## Approved decisions (from the spec; no need to open it)
 
 - **Files:** `flake.nix`, `flake.lock`, `nix/package.nix`, `nix/nixos.nix`,
@@ -284,7 +287,7 @@ coders never stage, commit or push.
 3. **NixOS module.** Create `nix/nixos.nix`; add `nixosModules.default` to `flake.nix`.
    → verify:
    ```bash
-   nix eval --raw --impure --expr 'let f = builtins.getFlake (toString ./.); s = f.inputs.nixpkgs.lib.nixosSystem { system = "x86_64-linux"; modules = [ f.nixosModules.default { programs.omapod.enable = true; boot.isContainer = true; system.stateVersion = "25.11"; } ]; }; in s.config.environment.etc."xdg/mimeapps.list".text'
+   nix eval --raw --impure --expr 'let f = builtins.getFlake (toString ./.); s = f.inputs.nixpkgs.lib.nixosSystem { system = "x86_64-linux"; modules = [ f.nixosModules.default { programs.omapod.enable = true; boot.isContainer = true; system.stateVersion = "25.11"; } ]; }; in builtins.readFile s.config.environment.etc."xdg/mimeapps.list".source'
    # six lines naming io.github.arikisonfire.OmaPod.desktop
    ```
    Traps: run from the repo root; `getFlake` of a git dir sees only tracked files, so

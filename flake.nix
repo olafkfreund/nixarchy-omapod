@@ -37,6 +37,9 @@
 
       overlays.default = final: _: { omapod = final.callPackage ./nix/package.nix { }; };
 
+      nixosModules.default = import ./nix/nixos.nix self;
+      homeManagerModules.default = import ./nix/home.nix self;
+
       checks = forAll (s: _: { package = self.packages.${s}.omapod; });
     };
 }
