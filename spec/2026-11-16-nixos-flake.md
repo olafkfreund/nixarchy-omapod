@@ -43,7 +43,8 @@ flake.lock
 nix/package.nix        the omapod package
 nix/nixos.nix          NixOS module: programs.omapod
 nix/home.nix           Home Manager module: programs.omapod
-nix/merge-settings.py  three-way settings merge run at Home Manager activation
+nix/merge-settings.py  three-way settings merge, run by a user service
+nix/test_merge_settings.py  unit tests for it, run in the package's checkPhase
 nix/test.nix           NixOS VM test (both modules)
 .github/workflows/nix.yml
 README.md              new "NixOS" section
@@ -87,6 +88,9 @@ All new files sit under `nix/`, `.github/` and the repo root, so merges from ups
     `data/*.desktop.in`, `@BIN@` → `$out/bin/omapod`. It keeps the URL scheme and OPML
     `MimeType` line.
   - `$out/share/icons/hicolor/scalable/apps/io.github.arikisonfire.OmaPod.svg`.
+  - `$out/libexec/omapod-merge-settings`: `nix/merge-settings.py` wrapped like the app
+    (same Python env and `PYTHONPATH`), so it imports `omapod.config` and uses the app's
+    own `paths`, `instance_lock` and file format instead of copies of them.
 - Wrapper: `dontWrapGApps = true`, then in `postFixup`
   `makeWrapper ${python}/bin/python3 $out/bin/omapod --add-flags "-P -m omapod"
   --prefix PYTHONPATH : $out/share/omapod --suffix PATH : ${mpv}/bin:${xdg-utils}/bin
@@ -96,10 +100,13 @@ All new files sit under `nix/`, `.github/` and the repo root, so merges from ups
   (the wrapped Python env) with the inherited environment, which still has `PYTHONPATH`,
   `GI_TYPELIB_PATH`, `XDG_DATA_DIRS` and `PATH` from the wrapper, so it works unchanged.
 - `checkPhase` (`doCheck = true`): `HOME=$TMPDIR OMAPOD_MPV_AO=null xvfb-run -a
-  dbus-run-session -- python -B -m unittest discover -v -s tests -t .`.
-  `nativeCheckInputs = [ mpv openssl xvfb-run dbus ]` plus the GTK inputs. Running under
-  Xvfb lets `test_dock` and `test_tiling` run instead of skip. `-v` prints every skip
-  with its reason.
+  dbus-run-session -- ${python.interpreter} -B -m unittest discover -v -s tests -t .`,
+  then the same for `nix/test_merge_settings.py`. The interpreter is named explicitly,
+  and `python` (the env with PyGObject) is in `nativeCheckInputs` so a test that spawns
+  `python3` gets the same one. `nativeCheckInputs = [ python mpv openssl xvfb-run dbus ]`;
+  the GTK `buildInputs` and `wrapGAppsHook4`'s setup hook keep `GI_TYPELIB_PATH` set
+  during the check. Running under Xvfb lets `test_dock` and `test_tiling` run instead of
+  skip. `-v` prints every skip with its reason.
   - `tests/test_install.py` stays skipped by design: it tests `install.sh`, which Nix
     does not use, and needs `git` plus `/usr/bin`. `git` is left out of the check inputs
     so its skip guard (`tests/test_install.py:18-25`) holds.
@@ -123,12 +130,17 @@ timer would start for every account, which `install.sh` never did.
 |---|---|---|
 | `enable` | bool, false | `home.packages = [ package ]` |
 | `package` | package | |
-| `refreshTimer.enable` | bool, false | `systemd.user.{services,timers}.omapod-refresh`, same unit text as `install.sh` (`ExecStart = omapod --refresh`, oneshot) |
+| `refreshTimer.enable` | bool, false | `systemd.user.{services,timers}.omapod-refresh`, same unit text as `install.sh` but `ExecStart = ${package}/bin/omapod --refresh` (the selected package, not a `PATH` lookup), oneshot |
 | `refreshTimer.onCalendar` | str, `"hourly"` | `OnCalendar`; `RandomizedDelaySec=5min`, `Persistent=true` kept |
 | `keybindings.enable` | bool, true | one switch for all keys |
 | `keybindings.backend` | `"nixarchy"` \| `"hyprland"`, `"nixarchy"` | see below |
 | `keybindings.binds` | attrsOf (nullOr str) | key → `omapod ctl` arguments; `null` drops a default |
 | `widget.enable` | bool, false | install the bar widget (below) |
+| `widget.showTitle` | bool, true | widget default (below) |
+| `widget.maxTitleWidth` | int 60–600, 180 | widget default |
+| `widget.hideWhenStopped` | bool, false | widget default |
+| `widget.launchCommand` | str, `""` | widget default; empty runs `uwsm-app -- omapod` |
+| `widget.socketPath` | str, `""` | widget default; empty is the app's default socket |
 | `settings` | attrsOf JSON, `{}` | app preferences, merged into `settings.json` (below) |
 | `defaultHandler` | bool, true | if the user already has `xdg.mimeApps.enable`, adds the URL/OPML defaults with `mkDefault`; never turns `xdg.mimeApps` on itself (that would replace their `mimeapps.list` with a store link) |
 
@@ -162,9 +174,12 @@ quoting in Lua or Hyprland syntax and nothing can inject code.
 `install.sh --plugin`:
 
 - target `~/.config/omarchy/plugins/io.github.arikisonfire.pod`;
-- if it has `.git` (marketplace clone): print the same notice as `install.sh` and leave it;
-- else if every file already matches (`cmp`): do nothing, so the shell does not reload;
-- else copy the three files into a staging dir, swap it in, and write `.nix-managed`.
+- absent: copy the files into a staging dir, swap it in, write `.nix-managed`;
+- present with `.nix-managed`: if every file already matches (`cmp`), do nothing (so the
+  shell does not reload); else replace it the same way;
+- present without `.nix-managed` (marketplace clone with `.git`, an `install.sh --plugin`
+  copy, or a hand-edited one): leave it untouched and print a notice saying how to hand
+  it over (`omarchy plugin remove …` or `install.sh --uninstall`, then rebuild).
 - With `widget.enable = false`, a target that has `.nix-managed` is removed; any other is
   left alone.
 
@@ -172,22 +187,61 @@ Copies, not store symlinks: the Omarchy shell watches that folder and it is not 
 whether it follows symlinks out of it. Enabling the widget in the bar stays with the user
 (`omarchy plugin enable io.github.arikisonfire.pod`).
 
-**Settings** (`settings`): applied at activation by `nix/merge-settings.py` (run with the
-package's Python) as a three-way merge, so Nix sets defaults and the UI can still change
-them:
+The five `widget.*` settings are written into the copied `manifest.json` as
+`barWidget.defaults` (its existing field, `manifest.json:22`), so the copy carries the
+user's values instead of upstream's. Nothing writes `~/.config/omarchy/shell.json`,
+per the intent approval: once the widget is in the bar, values set there win. The
+Omarchy shell reads `barWidget.defaults` into its widget registry
+(`share/omarchy/shell/shell.qml:1497` in omarchy-edge-20261104); whether it seeds a new
+bar entry from them could not be confirmed from the source, so the plan checks it by hand
+once (add the widget, read the new entry in `shell.json`). If it does not, these five
+options are documented as "defaults for the bar's settings form", or removed if they
+have no effect, and the README says so.
 
-- It keeps `~/.config/omapod/.nix-settings.json`, holding what Nix applied last time.
-- For each key in the new Nix settings: if `settings.json` lacks it, or still has the
-  value Nix applied last time, it gets the new value; if the user changed it in the UI,
-  the user's value stays.
-- A key dropped from Nix whose file value is still the last-applied value is removed, so
-  the app default applies again.
-- Written like the app writes it: atomic replace, mode 0600, sorted JSON
-  (`omapod/config.py:238-251`). A running app keeps these keys on its next save
-  (`config.py:335-349`) and picks up new values on restart.
-- An unreadable or non-object `settings.json` is left untouched and activation prints a
-  warning: user data is never overwritten.
-- `OMAPOD_HOME` is ignored, since activation targets the normal XDG paths only.
+**Settings** (`settings`): a three-way merge, so Nix sets defaults and the UI can still
+change them. It runs as a user oneshot `omapod-settings.service`
+(`ExecStart = ${package}/libexec/omapod-merge-settings <store JSON>`,
+`WantedBy = default.target`). Home Manager restarts it when the JSON changes, and it runs
+again at every login, normally before the app starts.
+
+Concurrency: the merge takes the app's own `instance_lock("nix-settings")`
+(`omapod/config.py:440-464`, same runtime dir through the app's `paths`), the lock the app
+and the background refresh hold for their whole run. If it is busy the merge does
+nothing, leaves its bookkeeping alone, logs "omaPOD is running; settings apply at next
+login or rebuild", and exits 0. So the merge never races a running writer.
+
+Ownership, per key, kept in `~/.config/omapod/.nix-settings.json` = the value **Nix last
+wrote into `settings.json`** for that key (not the value last declared):
+
+| Case | Result |
+|---|---|
+| Key declared, absent from `settings.json` | write the declared value; record it |
+| Key declared, file value == recorded value (Nix still owns it) | write the declared value; record it |
+| Key declared, file value == declared value | nothing to write; record it |
+| Key declared, file value differs from both | the user changed it: keep it; recorded value unchanged |
+| Key no longer declared, file value == recorded value | remove the key (app default again); forget it |
+| Key no longer declared, file value differs | keep it; forget it |
+
+Example: Nix writes speed 1.5 (recorded 1.5); the user picks 2.0; Nix later declares 2.0
+(file == declared, record 2.0, so Nix owns it again) or 3.0 (file 2.0 ≠ recorded 1.5:
+user's 2.0 stays). A user who resets a key in the UI removes it from the file, so the
+next run writes the Nix value again; the README says so.
+
+Failure rules, all erring toward the user's data:
+
+- `settings.json` exists but is unreadable or not a JSON object: touch nothing, log a
+  warning, exit 0.
+- Sidecar missing or damaged: treat as empty, so only absent keys get Nix values;
+  values already in the file count as the user's.
+- `settings.json` is written first (the app's `_atomic_write`, mode 0600), then the
+  sidecar. Interrupted between the two, a key Nix just wrote no longer equals the
+  recorded value, so it counts as the user's; nothing is lost, and Nix stops managing that
+  key until the user sets it back.
+- `OMAPOD_HOME` is ignored: the service sees only the normal XDG paths.
+
+`nix/test_merge_settings.py` covers every table row, the example above, a busy lock, a
+damaged `settings.json`, a damaged sidecar, and rollback (an older declaration applied
+after a newer one: same rules, no special case).
 
 Refused at evaluation (assertion naming the key): `podcastindex_key`,
 `podcastindex_secret`, `proxy.password`, `parental_password_hash`, `local_folders`
@@ -201,9 +255,11 @@ the app ignores them, and new upstream keys work without a module change.
 One `pkgs.testers.runNixOSTest` node: the NixOS module and Home Manager's NixOS module,
 user `alice` with `linger = true`, Home Manager for alice with `refreshTimer`,
 `widget`, `keybindings` (with one default removed and one added) and
-`settings = { speed = 1.5; }`. Before Home Manager activates, alice's `settings.json` is
-seeded with `{ "rewind_secs": 5 }` (activation ordering uses a oneshot unit before
-`home-manager-alice.service`).
+`settings = { speed = 1.5; }` and `widget.maxTitleWidth = 240`. Before Home Manager
+activates, alice's `settings.json` is seeded with `{ "rewind_secs": 5 }` (a oneshot unit
+ordered before `home-manager-alice.service`). Every command for alice runs through
+`su - alice` with `XDG_RUNTIME_DIR=/run/user/<uid>` and her session bus, so the app,
+`omapod ctl` and `systemctl --user` all see her home and runtime dir.
 
 Assertions:
 
@@ -212,13 +268,19 @@ Assertions:
 2. `omapod-binds.lua` has the four expected lines, lacks the removed one, contains no
    unquoted text.
 3. `settings.json` has `speed = 1.5` and still `rewind_secs = 5`; mode 0600.
-4. Change `speed` to 2.0 in the file, re-run activation: still 2.0 (UI value wins).
-5. The widget dir has `manifest.json`, `plugin/BarWidget.qml`, `.nix-managed`, and no
-   `omapod/`.
-6. `systemctl --user is-enabled omapod-refresh.timer` for alice.
+4. Change `speed` to 2.0 in the file, restart `omapod-settings.service`: still 2.0 (UI
+   value wins).
+5. The widget dir has `manifest.json` (with `maxTitleWidth` 240 in `barWidget.defaults`),
+   `plugin/BarWidget.qml`, `.nix-managed`, and no `omapod/`.
+6. `systemctl --user is-enabled omapod-refresh.timer`, then
+   `systemctl --user start omapod-refresh.service` succeeds (no podcasts, no network:
+   the refresh has nothing to do and exits 0).
 7. As alice: `OMAPOD_MPV_AO=null xvfb-run -a dbus-run-session -- omapod &`, then
-   `wait_until_succeeds("omapod ctl state")` returns JSON, then `omapod ctl quit`. That
-   proves GTK, libadwaita, the typelibs and the control socket work from the store.
+   `wait_until_succeeds("omapod ctl state")` returns JSON. While it runs, restart
+   `omapod-settings.service`: it exits 0 and its journal says "omaPOD is running"
+   (lock respected). Then
+   `omapod ctl quit`. That proves GTK, libadwaita, the typelibs and the control socket
+   work from the store.
 
 ### .github/workflows/nix.yml
 
@@ -268,9 +330,12 @@ Also the `## Development` section gains `nix build` / `nix flake check`.
 
 - **Xvfb tests flaky in the Nix sandbox** (`test_tiling`, `test_dock`): if they are, the
   plan step falls back to running them in the VM test only, and the README and PR say so.
-- **Activation and a running app writing `settings.json` at the same moment**: both do
-  atomic replaces; the later one wins for the whole file, and the app's merge keeps other
-  keys. Worst case, one Nix default is applied on the next activation instead. No data loss.
+- **Settings merge and a running app**: avoided by taking the app's instance lock; the
+  cost is that a rebuild while omaPOD runs applies new Nix settings only at the next login
+  or rebuild. The app's own UI does not take that lock for single settings changes, but
+  it is held for the app's whole lifetime, so no UI write happens while the merge holds it.
+- **Widget defaults may not reach the bar** (see Widget above): checked by hand in the
+  plan; the options are re-documented or dropped if they do nothing.
 - **Key clashes on other machines**: `Super+Ctrl+Shift+K/O/N/,/.` are free here and in
   Omarchy's defaults as printed; other users' own binds can clash. Each key can be changed
   or set to `null`.
