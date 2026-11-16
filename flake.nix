@@ -10,7 +10,12 @@
   };
 
   outputs =
-    { self, nixpkgs, ... }:
+    {
+      self,
+      nixpkgs,
+      home-manager,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -40,6 +45,14 @@
       nixosModules.default = import ./nix/nixos.nix self;
       homeManagerModules.default = import ./nix/home.nix self;
 
-      checks = forAll (s: _: { package = self.packages.${s}.omapod; });
+      checks = forAll (
+        s: pkgs:
+        {
+          package = self.packages.${s}.omapod;
+        }
+        // nixpkgs.lib.optionalAttrs (s == "x86_64-linux") {
+          vm = import ./nix/test.nix { inherit self home-manager pkgs; };
+        }
+      );
     };
 }
