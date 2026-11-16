@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: none (issues disabled on olafkfreund/nixarchy-omapod)
 spec: spec/2026-11-16-nixos-flake.md
 coders:
