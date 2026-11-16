@@ -34,6 +34,8 @@ stdenv.mkDerivation {
       ../omapod
       ../tests
       ../nix/run-tests.py
+      ../nix/merge-settings.py
+      ../nix/test_merge_settings.py
       ../plugin
       ../data
       ../manifest.json
@@ -65,6 +67,7 @@ stdenv.mkDerivation {
     mkdir -p $out/share/omapod/widget/plugin $out/share/applications \
       $out/share/icons/hicolor/scalable/apps
     cp -r omapod $out/share/omapod/omapod
+    cp nix/merge-settings.py $out/share/omapod/merge-settings.py
     find $out/share/omapod -name __pycache__ -type d -prune -exec rm -rf {} +
     cp manifest.json LICENSE $out/share/omapod/widget/
     cp plugin/BarWidget.qml $out/share/omapod/widget/plugin/
@@ -94,6 +97,16 @@ stdenv.mkDerivation {
         ]
       } \
       "''${gappsWrapperArgs[@]}"
+    makeWrapper ${python}/bin/python3 $out/libexec/omapod-merge-settings \
+      --add-flags "-P $out/share/omapod/merge-settings.py" \
+      --prefix PYTHONPATH : $out/share/omapod \
+      --suffix PATH : ${
+        lib.makeBinPath [
+          mpv
+          xdg-utils
+        ]
+      } \
+      "''${gappsWrapperArgs[@]}"
   '';
 
   doCheck = true;
@@ -113,6 +126,7 @@ stdenv.mkDerivation {
     chmod +x $TMPDIR/bin/dbus-run-session
     export PATH=$TMPDIR/bin:$PATH
     xvfb-run -a dbus-run-session -- ${python.interpreter} -B nix/run-tests.py
+    PYTHONPATH=$PWD ${python.interpreter} -B -m unittest -v nix/test_merge_settings.py
     runHook postCheck
   '';
 
