@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: none (issues are disabled on olafkfreund/nixarchy-omapod; see open question 1)
 author: olafkfreund
 ---
