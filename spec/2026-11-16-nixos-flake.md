@@ -1,5 +1,5 @@
 ---
-status: draft
+status: approved
 issue: none (issues disabled on olafkfreund/nixarchy-omapod; proceeding without, per intent approval)
 intent: intent/2026-11-16-nixos-flake.md
 ---
