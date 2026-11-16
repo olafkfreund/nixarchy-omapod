@@ -81,7 +81,11 @@ coders never stage, commit or push.
   `nix/home.nix`, `nix/example-home.nix`, `nix/merge-settings.py`,
   `nix/test_merge_settings.py`, `nix/test.nix`, `.github/workflows/nix.yml`,
   `README.md`, `nix/run-tests.py`; and for change E only `omapod/player/mpv.py` and
-  `tests/test_player.py`. No other change under `omapod/`, `tests/`, `plugin/`, `data/`,
+  `tests/test_player.py`, `tests/test_hardening.py` (added tests only) and
+  `tests/census.txt` (deviation in step 1a: the census test in `tests/test_exposure.py`
+  requires every new outside call to be listed; two lines added for `Mpv.start →
+  shutil.which` and `_curl_enabled_option → subprocess.run`). No other change under
+  `omapod/`, `tests/`, `plugin/`, `data/`,
   nor to `install.sh` or `manifest.json`.
 - **Flake:** inputs `nixpkgs` (`github:NixOS/nixpkgs/nixos-unstable`) and `home-manager`
   (`github:nix-community/home-manager`, `inputs.nixpkgs.follows = "nixpkgs"`; used only

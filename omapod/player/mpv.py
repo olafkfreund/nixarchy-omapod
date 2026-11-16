@@ -20,6 +20,20 @@ from .. import USER_AGENT
 # Far longer than anything mpv sends omaPOD. Its messages carry what a media file says about itself (tags,
 # chapters), and a line without an end would otherwise grow until memory runs out.
 MAX_MESSAGE = 64 * 1024 * 1024
+_curl_options = {}
+
+
+def _curl_enabled_option(path):
+    key = (path, os.stat(path).st_mtime_ns)
+    if key not in _curl_options:
+        try:
+            result = subprocess.run([path, "--list-options"], capture_output=True, text=True, timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            return True
+        if result.returncode != 0:
+            return True
+        _curl_options[key] = "--curl-enabled" in result.stdout
+    return _curl_options[key]
 
 
 class MpvError(Exception):
@@ -48,6 +62,14 @@ class Mpv:
     def start(self, volume=100):
         if self.alive:
             return
+        path = shutil.which("mpv")
+        if path is None:
+            raise MpvError("mpv is not installed")
+        path = os.path.realpath(path)
+        try:
+            disable_curl = _curl_enabled_option(path)
+        except OSError:
+            disable_curl = True
         try:
             os.unlink(self.socket_path)
         except FileNotFoundError:
@@ -60,7 +82,7 @@ class Mpv:
         # for playlists, archives, cue sheets or edit lists. Left to itself, mpv takes an answer that is a
         # playlist for one, of any length, and goes on to play the addresses in it.
         args = [
-            "mpv", "--idle=yes", "--no-config", "--no-terminal", f"--input-ipc-server={self.socket_path}",
+            path, "--idle=yes", "--no-config", "--no-terminal", f"--input-ipc-server={self.socket_path}",
             "--tls-verify=yes", "--demuxer=lavf",
             "--audio-display=no", "--vid=no", "--force-window=no", "--keep-open=no", "--ytdl=no",
             "--cache=yes", "--demuxer-max-bytes=64MiB", "--demuxer-readahead-secs=60",
@@ -72,6 +94,9 @@ class Mpv:
         if ao:
             args.append(f"--ao={ao}")
         args += self.extra_args
+        # libcurl sends URL credentials before a 401; FFmpeg waits for the server to ask.
+        if disable_curl:
+            args.append("--curl-enabled=no")
         log = subprocess.DEVNULL
         if self.log_path:  # owner only, like everything omaPOD keeps
             log = os.fdopen(os.open(self.log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o600), "ab")

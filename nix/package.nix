@@ -33,6 +33,7 @@ stdenv.mkDerivation {
     fileset = lib.fileset.unions [
       ../omapod
       ../tests
+      ../nix/run-tests.py
       ../plugin
       ../data
       ../manifest.json
@@ -77,7 +78,21 @@ stdenv.mkDerivation {
     makeWrapper ${python}/bin/python3 $out/bin/omapod \
       --add-flags "-P -m omapod" \
       --prefix PYTHONPATH : $out/share/omapod \
-      --suffix PATH : ${lib.makeBinPath [ mpv xdg-utils ]} \
+      --suffix PATH : ${
+        lib.makeBinPath [
+          mpv
+          xdg-utils
+        ]
+      } \
+      "''${gappsWrapperArgs[@]}"
+    mkdir -p $out/libexec
+    makeWrapper ${python}/bin/python3 $out/libexec/omapod-python \
+      --suffix PATH : ${
+        lib.makeBinPath [
+          mpv
+          xdg-utils
+        ]
+      } \
       "''${gappsWrapperArgs[@]}"
   '';
 
@@ -97,7 +112,7 @@ stdenv.mkDerivation {
     printf '#!/bin/sh\nexec ${dbus}/bin/dbus-run-session --config-file=${dbus}/share/dbus-1/session.conf "$@"\n' > $TMPDIR/bin/dbus-run-session
     chmod +x $TMPDIR/bin/dbus-run-session
     export PATH=$TMPDIR/bin:$PATH
-    xvfb-run -a dbus-run-session -- ${python.interpreter} -B -m unittest discover -v -s tests -t .
+    xvfb-run -a dbus-run-session -- ${python.interpreter} -B nix/run-tests.py
     runHook postCheck
   '';
 
